@@ -23,4 +23,7 @@ scripts
 |   |-- jobsub
 |   `-- jobsub_README.txt
 `-- img_utils
+    |-- TDI.sh
+    `-- ants2fnirt.sh
+
 ```
