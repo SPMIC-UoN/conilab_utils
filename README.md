@@ -22,8 +22,12 @@ scripts
 |   |-- fsl_sub
 |   |-- jobsub
 |   `-- jobsub_README.txt
+|-- git_scripts
+|   |-- git_commit.py
+|   `-- linting_pre_commit
 `-- img_utils
     |-- TDI.sh
     `-- ants2fnirt.sh
+
 
 ```
