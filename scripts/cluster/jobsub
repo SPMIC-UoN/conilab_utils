@@ -1,0 +1,574 @@
+#!/bin/bash
+
+DEBUGCOUNT=0
+
+QUEUETYPE=0 #Mandatory
+JOBID=0 #optional
+PROCESSORS=0 #Mandatory
+INTERACTIVE=0 #optional
+SUBMISSIONID=0 #Mandatory
+COMMAND=0 #Mandatory
+TIME=0 #Mandatory
+MEMORY=0 #Mandatory
+GPUS=0 #optional
+DEBUG=0 #optional
+JOBARRAY=0 #optional
+
+
+################################################## Setup Queue Arrays ##################################################
+
+CPUQueues=5  #Number of CPU queues defined below, revise accordingly
+GPUQueues=2  #Number of GPU queues defined below, revise accordingly
+QueueArrayWidth=6
+GpuArrayWidth=8
+
+Vol_Pas_Sub_Ratio=1.7  #ratio of jobs submitted to row 1 (imgvoltaq default) of gpu array vs row 2 (imgpascalq) of gpu array, in case all GPU resources are occupied
+
+#Queue Array column order : QueueName | Cores/Node | RAM/Node | LoopExitVariable | Nodes Required for Job | Processes Per Node
+
+QueueArray=("imgcomputeq" "40" "190" "0" "0" "0"
+#"spmcomputeq" "8" "120" "0" "0" "0"
+"imghmemq" "80" "1500" "0" "0" "0"
+"imgvoltaq" "30" "700" "0" "0" "0"
+"imgpascalq" "30" "700" "0" "0" "0"
+"defq" "40" "190" "0" "0" "0"
+"imgcomputeq" "40" "190" "1" "0" "0"
+)
+
+#GPU Array column order : QueueName | Cores/Node | RAM/Node | GPUs/Node | LoopExitVariable | Nodes Required for Job | Processes Per Node | Total Number of GPUs on Queue
+
+GpuArray=("imgvoltaq" "30" "700" "2" "0" "0" "0" "6"
+"imgpascalq" "30" "700" "2" "0" "0" "0" "4"
+#"voltaq" "30" "190" "2" "0" "0" "0" "6"
+"imgvoltaq" "30" "700" "2" "1" "0" "0" "6")
+
+################################################## Read Arguments ##################################################
+
+while getopts "q:w:p:s:t:m:g:c:idj" OPTIONS
+do
+    case $OPTIONS in
+	q)
+	    if [[ "$OPTARG" == "cpu" ]]; then
+			QUEUETYPE=1
+	    elif [[ "$OPTARG" == "gpu" ]]; then
+			QUEUETYPE=2
+	    else
+		QueueCheck=$(sinfo | grep $OPTARG )
+		if [[ -z "${QueueCheck// }" ]]; then
+		    QUEUETYPE=0
+		    echo "please provide a queue, cpu or gpu" 
+		else
+		    QUEUETYPE=3
+		    Queue=$OPTARG
+		fi
+	    fi
+		;;
+	w)
+	    JOBID=$OPTARG
+	    ;;
+	p)
+	    if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]
+	    then
+			PROCESSORS=0
+	    else
+			PROCESSORS=$OPTARG
+	    fi
+	    ;;
+	g)
+	    if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]
+	    then		
+			GPUS=0
+	    else
+			GPUS=$OPTARG
+	    fi	    
+	    ;;
+	i)	    
+	    INTERACTIVE=1
+	    ;;
+	s)
+	    SUBMISSIONID=$OPTARG
+	    ;;
+	c)
+	    COMMAND=$OPTARG
+	    ;;
+	t)
+	    TIME=$OPTARG
+	    ;;
+	m)
+	    MEMORY=$OPTARG
+	    ;;
+	d)
+	    DEBUG=1
+	    ;;
+	j)
+	    JOBARRAY=1
+	    ;;
+	*)
+	    ;;
+    esac 
+done
+
+########################################################################################################################
+
+########################################### Check and Confirm Input Arguments ##########################################
+
+GPUCHECK=0;
+## Check Mandatory options have been given correctly
+if [[ $QUEUETYPE == 0 || $PROCESSORS == 0 || $SUBMISSIONID == 0 || $COMMAND == 0 || $TIME == 0 || $MEMORY == 0 || (( $QUEUETYPE == 2 && $GPUS == 0 )) ]]
+then
+    echo "jobsub : wrapper script for augusta queue submission"
+    echo "usage: "
+    echo "    bash scomputeq [options]"
+    echo "        -q {cpu , gpu, [Augusta Queue Name]}"
+    echo "        -p <cores>"
+    echo "        -s <submission name>"
+    echo "        -c <command>"
+    echo "        -t <HH:MM:SS>"
+    echo "        -m <memory in gbs>"
+    echo "        [-i]"
+    echo "        [-d]"
+    echo "        [-w <jobid(s)>]"
+    echo "        [-g <gpus>]"
+    echo "        [-j]"
+    exit 1
+else
+    if [[ $JOBARRAY == 0 ]]; then
+	if [ $QUEUETYPE == 1 ] && [ $GPUS != 0 ]; then
+    	    echo "This is a CPU job -g will be ignored, override and submit gpu job? (y/n) then [ENTER]"
+    	    read GPUCHECK
+    	    if [[ "$GPUCHECK" == 'y' ]]; then
+    		QUEUETYPE=2
+    	    else
+    		echo "-g options will be ignored"
+    	    fi	    
+	fi
+	echo "Queue : "$QUEUETYPE
+	echo "Processors : "$PROCESSORS
+	if [[ $QUEUETYPE == 2 ]]; then
+    	    echo "GPUs : "$GPUS
+	fi
+	echo "Walltime : "$TIME
+	echo "Memory : "$MEMORY"gb"
+	echo "Script : "$SUBMISSIONID
+	if [[ $INTERACTIVE == 1 ]]; then
+	    echo "Interactive : yes"
+	fi
+	if [[ $JOBID != 0 ]]; then
+	    echo "Job Dependency : "$JOBID
+	fi
+	if [[ $DEBUG == 1 ]]; then
+	    echo "Debug Mode"
+	fi
+    fi
+fi
+
+########################################################################################################################
+
+
+######################################## Calculate required nodes based on CPUS ########################################
+
+if [[ $QUEUETYPE == 1 ]]; then
+    for i in $(seq 0 1 $[$[${#QueueArray[@]}/$QueueArrayWidth]-1] ) #loop over all queues
+    do
+	QueueArray[$[$i*$QueueArrayWidth+4]]=$(( $(( $PROCESSORS + $(( ${QueueArray[$[$i*$QueueArrayWidth+1]]} - 1 )) )) / ${QueueArray[$[$i*$QueueArrayWidth+1]]} )) # calculate required nodes on queue 
+	QueueArray[$[$i*$QueueArrayWidth+5]]=$(( $(( $PROCESSORS + $(( ${QueueArray[$[$i*$QueueArrayWidth+4]]} - 1 )) )) / ${QueueArray[$[$i*$QueueArrayWidth+4]]} ))
+    done
+elif [[ $QUEUETYPE == 2 ]]; then
+    for i in $(seq 0 1 $[$[${#GpuArray[@]}/$GpuArrayWidth]-1] ) #loop over all queues
+    do
+	GpuArray[$[$i*$GpuArrayWidth+5]]=$(( $(( $PROCESSORS + $(( ${GpuArray[$[$i*$GpuArrayWidth+1]]} - 1 )) )) / ${GpuArray[$[$i*$GpuArrayWidth+1]]} )) # calculate required nodes on queue 
+	GpuArray[$[$i*$GpuArrayWidth+6]]=$(( $(( $PROCESSORS + $(( ${GpuArray[$[$i*$GpuArrayWidth+5]]} - 1 )) )) / ${GpuArray[$[$i*$GpuArrayWidth+5]]} ))
+    done    
+fi
+
+########################################################################################################################
+
+if [[ $QUEUETYPE == 1 || $QUEUETYPE == 2 ]]; then ## QUEUETYPE 3 OR NOT 3 LOOP
+    if [[ $JOBARRAY == 1 ]]; then ## RAPID JOB SUBMISSION LOOP
+	if [[ $QUEUETYPE == 2 ]]; then # SUBMISSION TYPE LOOP 
+
+	    for i in $(seq 0 1 $GPUQueues)
+	    do
+		QueueNo=$i
+		Queue=${GpuArray[$[$QueueNo*$GpuArrayWidth]]}
+		Cores=${GpuArray[$[$QueueNo*$GpuArrayWidth+1]]}
+	  	RAM=${GpuArray[$[$QueueNo*$GpuArrayWidth+2]]}
+		NGpus=${GpuArray[$[$QueueNo*$GpuArrayWidth+3]]}
+		Found=${GpuArray[$[$QueueNo*$GpuArrayWidth+4]]}
+		TotalGpus=${GpuArray[$[$QueueNo*$GpuArrayWidth+7]]}
+
+		CurrentQueue=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C" | grep "$Queue" | wc -l)
+		CurrentRequestedProcessors=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C"  | grep "$Queue" | awk {'print $9'}) 
+		Nodes=$(sinfo | grep "$Queue" | awk {'print $4'})
+
+		TotalUsedProcessors=0
+		TotalNodes=0
+		  
+		for j in ${CurrentRequestedProcessors[@]}; do
+			let TotalUsedProcessors+=$j
+		done
+		for j in ${Nodes[@]}; do
+			let TotalNodes+=$j
+		done
+		TotalProcessors=$[$TotalNodes*$Cores]
+		IdlesProcessors=$[$TotalProcessors-$TotalUsedProcessors]
+		  
+		if [[ $CurrentQueue -lt $TotalGpus ]] && [[ $IdlesProcessors -ge $PROCESSORS ]]; then
+			break # queue size is smaller than required processors
+		elif [[ $Found ]]; then
+			# deal with full queues
+			Queue0=${GpuArray[$[0*$GpuArrayWidth]]}
+			Queue1=${GpuArray[$[1*$GpuArrayWidth]]}
+
+			CurrentQueue0=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C" | grep "$Queue0" | wc -l)
+			CurrentQueue1=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C" | grep "$Queue1" | wc -l)
+
+			if [[ $CurrentQueue1 == 0 ]]; then
+				Queue=$Queue1
+				QueueNo=1
+			else
+				if (( $(echo "$(bc -l <<< $CurrentQueue0/$CurrentQueue1 ) < $Vol_Pas_Sub_Ratio" | bc -l) )) ; then
+				    Queue=$Queue0
+				    QueueNo=0
+				else
+				    Queue=$Queue1
+				    QueueNo=1
+				fi
+			fi
+			Cores=${GpuArray[$[$QueueNo*$GpuArrayWidth+1]]}
+	  		RAM=${GpuArray[$[$QueueNo*$GpuArrayWidth+2]]}
+			NGpus=${GpuArray[$[$QueueNo*$GpuArrayWidth+3]]}
+			break
+		fi
+	    done
+
+	    Processorspernode=1
+	    RequiredGpus=$(( $(( $GPUS + $(( $NGpus - 1 )) )) / $NGpus )) 
+	    RequiredNodes=$RequiredGpus
+	    Gpuspernode=$(( $GPUS / $RequiredGpus ))
+	else # CPU job array type submission
+	    for i in $(seq 0 1 $CPUQueues)
+	    do
+	    	QueueNo=$i
+		Queue=${QueueArray[$[$QueueNo*$QueueArrayWidth]]}
+		Cores=${QueueArray[$[$QueueNo*$QueueArrayWidth+1]]}
+	  	RAM=${QueueArray[$[$QueueNo*$QueueArrayWidth+2]]}
+		Found=${QueueArray[$[$QueueNo*$QueueArrayWidth+3]]}
+		
+		CurrentQueue=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C" | grep "$Queue" | wc -l)
+		CurrentRequestedProcessors=$(squeue -o "%.18i %.11P %.8j %.8u %.2t %.10M %.6D %R %C"  | grep "$Queue" | awk {'print $9'}) 
+		Nodes=$(sinfo | grep "$Queue" | awk {'print $4'})
+		  
+		  
+		TotalUsedProcessors=0
+		TotalNodes=0
+		  
+		for j in ${CurrentRequestedProcessors[@]}; do
+		    let TotalUsedProcessors+=$j
+		done
+		for j in ${Nodes[@]}; do
+		    let TotalNodes+=$j
+		done
+		  
+		TotalProcessors=$[$TotalNodes*$Cores]
+		IdlesProcessors=$[$TotalProcessors-$TotalUsedProcessors]
+		  
+		if [[ $IdlesProcessors -ge $PROCESSORS ]]; then
+		    break # queue size is smaller than required processors
+		#elif [[ $Found ]]; then 
+		    ## Deal with completely filled queues (same as the gpu submission)
+		fi
+	    done	
+	fi # END OF SUBMISSION TYPE LOOP
+    else
+	
+	Found=0
+	WhileCount=-1
+	
+	while (( !Found )); ## QUEUE LOOP
+	do
+	    WhileCount=$[$WhileCount+1]
+	    if [[ $QUEUETYPE == 1 ]]; then
+	    	RequiredNodes=${QueueArray[$[$WhileCount*$QueueArrayWidth+4]]}
+		Queue=${QueueArray[$[$WhileCount*$QueueArrayWidth]]}
+		RAM=${QueueArray[$[$WhileCount*$QueueArrayWidth+2]]}
+		Found=${QueueArray[$[$WhileCount*$QueueArrayWidth+3]]}
+	    else
+		
+		RequiredNodes=${GpuArray[$[$WhileCount*$GpuArrayWidth+5]]}
+		Queue=${GpuArray[$[$WhileCount*$GpuArrayWidth]]}
+		Cores=${GpuArray[$[$WhileCount*$GpuArrayWidth+1]]}
+	   	RAM=${GpuArray[$[$WhileCount*$GpuArrayWidth+2]]}
+		NGpus=${GpuArray[$[$WhileCount*$GpuArrayWidth+3]]}
+		Found=${GpuArray[$[$WhileCount*$GpuArrayWidth+4]]}
+	    fi
+	    
+	    if [[ $RAM -lt $MEMORY ]]; then ## is there sufficient ram
+		continue
+	    fi
+	    
+	    ######################################## Determine if GPU job is viable ########################################
+
+	    if [[ $QUEUETYPE == 2 ]]
+	    then
+		RequiredGpus=$(( $(( $GPUS + $(( $NGpus - 1 )) )) / $NGpus )) 
+		if [[ $RequiredNodes > $GPUS ]]
+		then
+		    echo "You have requested "$PROCESSORS" cores which is ("$RequiredNodes") nodes on "$Queue" which is greater than the number of gpus ("$GPUS")"
+		    echo "You now have 3 options : "
+		    echo "(1) : I can reduce the requested core count to "$(($GPUS*$Cores))
+		    echo "(2) : I can increase the GPU count to "$RequiredNodes
+		    echo "(3) : I can exit and let you sort things out"
+		    read CHOICE
+		    case $CHOICE in 
+			[1]*)
+			    PROCESSORS=$(($GPUS*$Cores))
+			    RequiredNodes=$GPUS
+			    ;; 
+			[2]*)
+			    GPUS=$RequiredNodes
+			    ;; 
+			[3]*)
+			    echo "Good Choice"
+			    exit 1
+			    ;; 
+			*)
+			    echo "Invalid Choice"
+			    exit 1
+			    ;;
+		    esac
+		fi
+		if [[ $RequiredGpus > $RequiredNodes ]]; then
+		    echo "You have requested "$GPUS" gpu(s) and "$PROCESSORS" process(es) these are incompatible because there are "$NGpus" per node on "$Queue" requiring "$RequiredGpus" nodes, I am increasing your processor count to " $RequiredGpus
+		    
+		fi
+	    fi
+	    
+	    #################################################################################################################
+
+	    if [[ $QUEUETYPE == 1 ]]; then
+		Processorspernode=${QueueArray[$[$i*$QueueArrayWidth+5]]}
+	    elif [[ $QUEUETYPE == 2 ]]; then
+		Processorspernode=1
+		RequiredNodes=$RequiredGpus
+		Gpuspernode=$(( $GPUS / $RequiredGpus ))
+	    fi
+	    
+	    Nodes=$(sinfo --state=idle | grep "$Queue" | awk {'print $4'})
+	    
+	    if [[ $Nodes -ge $RequiredNodes ]]; then ## SUFFICENT IDLE RESOURCE LOOP
+		echo "Sufficient Nodes Available on" $Queue
+		QueueNo=$WhileCount
+		Found=1
+	    else
+		echo "Insufficient Nodes Available on" $Queue
+		NodeShortFall=$((${QueueArray[$[$i*$QueueArrayWidth+4]]}-$Nodes))
+		if [[ $QUEUETYPE == 1 &&(( $Queue == "imgvoltaq" || $Queue == "imgpascalq" )) ]]; then ## QUEUETYPE 1 or 2 LOOP
+		    NODENAME=$(sinfo --state=mix | grep $Queue | awk {'print $6'} | awk -F']' {'print $1'} | awk -F'[' {'print $1'})
+		    i=$(sinfo --state=mix | grep $Queue | awk {'print $6'} | awk -F']' {'print $1'} | awk -F'[' {'print $2'})
+		    if [[ "$i" == *[0123456789]* ]]; then
+			IFS=',' read -ra ADDR <<< "$i"
+			for j in "${ADDR[@]}"; do
+			    echo $j
+			    if [[ "$j" == *['-']* ]]; then
+				NameCount=0
+				IFS='-' read -ra ADDR <<< "$j"
+				for k in "${ADDR[@]}"; do
+				    if [[ $NameCount = 0 ]]; then
+					start=${k#0}
+					NameCount=1
+				    else
+					end=${k#0}
+				    fi
+				done
+				n=$start
+				while [[ $n -le $end ]]
+				do
+				    NodeID=$(printf '%03d\n' $n)
+				    NODE=$(sinfo -o "%S%C" -n $NODENAME$NodeID)
+				    status=0
+				    for p in $NODE
+				    do
+					if [[ $status == 1 ]]; then
+					    IFS='/' read -ra ADDR <<< "$p"
+					    status=0
+					    for q in "${ADDR[@]}"; do
+						if [[ $status == 1 ]]; then
+						    if [[ "$Processorspernode" -le "$q" ]]; then
+							NodeShortFall=$[$NodeShortFall-1]
+							if [[ $NodeShortFall == 0 ]]; then
+							    echo "Turns out there actually are Sufficient Nodes Available on" $Queue "if we include the busy nodes!"
+							    Found=1
+							    QueueNo=$WhileCount
+							    break
+							fi
+						    fi
+						fi
+						status=$[$status+1]
+					    done
+					fi
+					status=$[$status+1]
+				    done						    
+				    n=$[$n+1]
+				done
+			    fi
+			done
+		    fi  
+		elif [[ $QUEUETYPE == 2 ]]; then
+		    IdleNodes=$(sinfo --state=idle | grep $Queue | awk {'print $NF'} | awk -F ',' {'print $NF'} | awk -F '-' {'print $NF'} | awk -F ']' {'print $1'}) #largest idle node number
+		    MixNodes=$(sinfo --state=mix | grep $Queue | awk {'print $NF'} | awk -F ',' {'print $NF'} | awk -F '-' {'print $NF'} | awk -F ']' {'print $1'}) #largest mix node number
+		    if [[ "$IdleNodes" == "n/a" ]]; then
+			NumberOfNodes=$(echo $MixNodes | sed 's/^0*//')
+		    elif [[ "$MixNodes" == "n/a" ]]; then
+			NumberOfNodes=$(echo $IdleNodes | sed 's/^0*//')
+		    else
+			if [[ $(echo $IdleNodes | sed 's/^0*//') < $(echo $MixNodes | sed 's/^0*//') ]]; then
+			    NumberOfNodes=$(echo $MixNodes | sed 's/^0*//')
+			else
+			    NumberOfNodes=$(echo $IdleNodes | sed 's/^0*//')
+			fi
+		    fi
+		    declare GpuNodes
+		    for i in $(seq 1 1 $NumberOfNodes)
+		    do
+			GpuNodes[$[$i-1]]=$NGpus
+			if [[ $(( $NumberOfNodes * $NGpus )) < $GPUS ]]; then
+			    echo "There arent enough GPUs to use this queue, reduce your GPU count"
+			    unset GpuNodes
+			    continue
+			else
+			    GPUJOBS=$(squeue | grep $Queue | grep " R " | awk {'print $1'})
+			    UsedGpus=0
+			    for G in $GPUJOBS
+			    do			
+				if [[ $(sacct --noheader -o ReqGRES,NodeList -j $G | awk {'print $1'}) == *"gpu"* ]]; then
+				    GpuJob=$(sacct --noheader -o ReqGRES,NodeList -j $G | awk {'print $1'})
+				    status=0
+				    IFS=':' read -ra ADDR <<< "$GpuJob"
+				    for i in "${ADDR[@]}"; do
+					if [[ $status == 1 ]]; then
+					    UsedGpus=$(( $UsedGpus + $i ))
+					    NodeNumber=$(sacct --noheader -o ReqGRES,NodeList -j $G | awk {'print $1'} | sed 's/[^0-9]*//g' | sed 's/^0*//')
+					    GpuNodes[$[$NodeNumber-1]]=$[GpuNodes[$[$NodeNumber-1]] - $i]
+					fi
+					status=$[$status+1]
+				    done
+				fi			
+			    done
+			    if [[ $(( $(( $NumberOfNodes * $NGpus )) - $UsedGpus )) < $GPUS ]]; then			
+				unset GpuNodes
+				continue			
+			    else	
+				ApplicableNodes=0
+				for i in $(seq 1 1 $NumberOfNodes)
+				do
+				    if [[ $[GpuNodes[$[$i-1]]] -ge $Gpuspernode ]]; then
+					ApplicableNodes=$[$ApplicableNodes+1]
+				    fi
+				done
+				if [[ $ApplicableNodes -ge $RequiredNodes ]]; then
+				    Found=1						
+				    QueueNo=$WhileCount
+				    echo "Turns out there actually are Sufficient Nodes Available on" $Queue "if we include the busy nodes!"
+				    break
+				fi
+			    fi
+			fi
+		    done
+		    unset GpuNodes
+
+		fi ## END OF QUEUETYPE 1 or 2 LOOP
+
+	    fi ## END OF SUFFICIENT IDLE RESOURCE LOOP
+
+	done ## END OF WHILE LOOP
+
+    fi ## END OF RAPID JOB SUBMISSION LOOP
+
+else ## Specific queue job submission all queue scanning bypassed
+    QueueNo=0
+    ProcessorsOnNodes=$(sinfo --noheader -o "%.11P %.5a %.10l %.6D %.6t %N %c" | grep "$Queue" | awk {'print $7'} | head -n 1)
+    QueueArray[$[$QueueNo*$QueueArrayWidth+4]]=$(( $(( $PROCESSORS + $ProcessorsOnNodes )) / $ProcessorsOnNodes )) # calculate required nodes on queue 
+    QueueArray[$[$QueueNo*$QueueArrayWidth+5]]=$(( $(( $PROCESSORS + $(( ${QueueArray[$[$QueueNo*$QueueArrayWidth+4]]} - 1 )) )) / ${QueueArray[$[$QueueNo*$QueueArrayWidth+4]]} ))
+    if [[ $GPUS -gt "0" ]]; then
+	Gpuspernode=$(( $GPUS / ${QueueArray[$[$QueueNo*$QueueArrayWidth+4]]} ))
+    fi
+fi ## END OF QUEUTYPE 3 OR NOT 3 LOOP
+
+############################## Write Something to the command line to confirm settings ##############################
+
+if [[ $QUEUETYPE == 1 || $QUEUETYPE == 3 ]]; then
+    Output="Submitting Job to $Queue using ${QueueArray[$[$QueueNo*$QueueArrayWidth+4]]} Node(s) with ${QueueArray[$[$QueueNo*$QueueArrayWidth+5]]} process(es) per node and a wall time of $TIME"
+elif [[ $QUEUETYPE == 2 ]]; then
+    Output="Submitting Job to $Queue using ${GpuArray[$[$QueueNo*$GpuArrayWidth+5]]} Node(s) with ${GpuArray[$[$QueueNo*$GpuArrayWidth+6]]} process(es) per node and a wall time of $TIME"
+    Output=" $Output and $Gpuspernode GPUs"
+fi
+if [[ $JOBARRAY == 0 ]]; then
+echo ""
+fi
+echo $Output
+if [[ $JOBARRAY == 0 ]]; then
+    echo ""
+    echo "writing Job file" $SUBMISSIONID"_slurm.sh"
+fi
+
+#####################################################################################################################
+
+########################################## Write out job submission Script ##########################################
+
+echo "#!/bin/bash" > $SUBMISSIONID"_slurm.sh"
+echo "#SBATCH --time="$TIME >> $SUBMISSIONID"_slurm.sh"
+echo "#SBATCH --job-name="$SUBMISSIONID >> $SUBMISSIONID"_slurm.sh"
+echo "#SBATCH --partition="$Queue >> $SUBMISSIONID"_slurm.sh"
+if [[ $QUEUETYPE == 1 || $QUEUETYPE == 3 ]]; then
+    echo "#SBATCH --nodes="${QueueArray[$[$QueueNo*$QueueArrayWidth+4]]} >> $SUBMISSIONID"_slurm.sh"
+    echo "#SBATCH --ntasks-per-node="${QueueArray[$[$QueueNo*$QueueArrayWidth+5]]} >> $SUBMISSIONID"_slurm.sh"
+elif [[ $QUEUETYPE == 2 ]]; then
+    echo "#SBATCH --nodes="${GpuArray[$[$QueueNo*$GpuArrayWidth+5]]} >> $SUBMISSIONID"_slurm.sh"
+    echo "#SBATCH --ntasks-per-node="${GpuArray[$[$QueueNo*$GpuArrayWidth+6]]} >> $SUBMISSIONID"_slurm.sh" 
+fi
+if [[ $GPUS -gt "0" ]]; then
+    echo "#SBATCH --gres=gpu:"$Gpuspernode >> $SUBMISSIONID"_slurm.sh"
+fi
+echo "#SBATCH --mem="$MEMORY"g" >> $SUBMISSIONID"_slurm.sh"
+if [[ $Queue == *"img"* ]]; then
+    echo "#SBATCH --qos=img" >> $SUBMISSIONID"_slurm.sh"
+fi
+if [[ $Queue == *"spm"* ]]; then
+    echo "#SBATCH --qos=spm" >> $SUBMISSIONID"_slurm.sh"
+fi
+
+if [[ $JOBID != 0 ]]; then
+	echo "#SBATCH --depend=afterok:"$JOBID >> $SUBMISSIONID"_slurm.sh"
+fi
+echo "" >> $SUBMISSIONID"_slurm.sh"
+echo "cd $""SLURM_SUBMIT_DIR" >> $SUBMISSIONID"_slurm.sh"
+echo "export OMP_NUM_THREADS=1" >> $SUBMISSIONID"_slurm.sh"
+echo "" >> $SUBMISSIONID"_slurm.sh"
+echo "CMD=\""$COMMAND"\"" >> $SUBMISSIONID"_slurm.sh"
+echo "$""CMD" >> $SUBMISSIONID"_slurm.sh"
+echo "" >> $SUBMISSIONID"_slurm.sh"
+
+#####################################################################################################################
+
+########################################### Submit job submission script ############################################
+
+if [[ $INTERACTIVE == 1 ]]; then
+    if [[ $JOBARRAY == 0 ]]; then
+	echo ""
+	echo "This Job will run interactively"
+    fi
+    if [[ $DEBUG == 0 ]]; then
+	srun $SUBMISSIONID"_slurm.sh"
+    fi
+else
+    if [[ $JOBARRAY == 0 ]]; then
+	echo ""
+	echo "This Job will run batch"
+    fi
+    if [[ $DEBUG == 0 ]]; then
+	sbatch $SUBMISSIONID"_slurm.sh"
+    fi
+fi
+
+#####################################################################################################################

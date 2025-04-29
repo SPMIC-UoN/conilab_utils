@@ -1,0 +1,162 @@
+#!/bin/sh
+
+#   tbss_1_preproc - preprocess FA data for TBSS
+#
+#   Stephen Smith, FMRIB Image Analysis Group
+#
+#   Options
+#   -s : Indicates that one wants to use structural
+#        scans to initialise the registration of the
+#        FA images. This can be useful for atrophied
+#        brains. If using this option, for each file 
+#        in the list of inputs there should also be
+#        a file with the same name but with the suffix
+#        _struct
+#   -m : Indicates that one wants to mask out certain
+#        parts of the brains when registering them to
+#        the template. This is useful/necessary when
+#        there are local atrophies in the brains. If 
+#        using this option, for each file in the list 
+#        of inputs there should also be a file with the 
+#        same name but with the suffix _mask
+#        The mask should be exclusive (i.e. have ones
+#        where the atrophy is), should include all of
+#        the atrophy and be a "snug fit".  
+#        If the -s option is used the masks are assumed
+#        to be in structural space, otherwise they are
+#        assumed to be in FA space. If using this option, 
+#        for each file in the list of inputs there should 
+#        also be a file with the same name but with the 
+#        suffix _mask
+#
+#   Copyright (C) 2005-2008 University of Oxford
+#
+#   SHCOPYRIGHT
+
+Usage() {
+    echo ""
+    echo "Usage: \ttbss_1_preproc <image1> <image2> ..."
+    echo "\ttbss_1_preproc -s <image1> <image2> ..."
+    echo "\ttbss_1_preproc -m <image1> <image2> ..."
+    echo ""
+    echo "Available options are:"
+    echo "\t-s : Indicates that one wants to use structural"
+    echo "\t     scans to initialise the registration of the"
+    echo "\t     FA images. This can be useful for atrophied"
+    echo "\t     brains. If using this option, for each file" 
+    echo "\t     in the list of inputs there should also be"
+    echo "\t     a file with the same name but with the suffix"
+    echo "\t     _struct"
+    echo "\t     These structurals should _not_ be betted."
+    echo "\t-m : Indicates that one wants to mask out certain"
+    echo "\t     parts of the brains when registering them to"
+    echo "\t     the template. This is useful/necessary when"
+    echo "\t     there are local atrophies in the brains. If" 
+    echo "\t     using this option, for each file in the list" 
+    echo "\t     of inputs there should also be a file with the" 
+    echo "\t     same name but with the suffix _mask"
+    echo "\t     The mask should be exclusive (i.e. have ones"
+    echo "\t     where the atrophy is), should include all of"
+    echo "\t     the atrophy and be a snug fit."  
+    echo "\t     If the -s option is used the masks are assumed"
+    echo "\t     to be in structural space, otherwise they are"
+    echo "\t     assumed to be in FA space. If using this option," 
+    echo "\t     for each file in the list of inputs there should" 
+    echo "\t     also be a file with the same name but with the" 
+    echo "\t     suffix _mask"
+
+    exit 1
+}
+
+[ "$1" = "" ] && Usage
+
+echo [`date`] [`hostname`] [`uname -a`] [`pwd`] [$0 $@] >> .tbsslog
+
+while [ $# -gt 0 ]
+do
+  case $1 in
+  -s)  struct=true
+       ;;
+  -m)  mask=true
+       ;;
+  -*)  echo $0: $1: invalid option >&2
+       exit 1
+       ;;
+  *)   break
+       ;;
+  esac
+  shift
+done
+
+mkdir -p FA
+mkdir -p origdata
+if [ $struct ]
+then
+  mkdir -p struct
+fi
+if [ $mask ]
+then
+  mkdir -p user_mask
+fi  
+
+#
+# Initial loop for error checking only
+#
+for f in `$FSLDIR/bin/imglob $@` ; do
+  if [ $? -eq 1 ]
+  then
+    echo file not found
+    exit 1
+  fi
+
+  if [ $struct ] && [ `$FSLDIR/bin/imtest ${f}_struct` -eq 0 ]
+  then
+    echo $0: file ${f}_struct not found
+    exit 1
+  fi 
+
+  if [ $mask ] && [ `$FSLDIR/bin/imtest ${f}_mask` -eq 0 ]
+  then
+    echo $0: file ${f}_mask not found
+    exit 1
+  fi 
+done
+
+for f in `$FSLDIR/bin/imglob $@` ; do
+
+  echo processing $f
+
+  # erode a little and zero end slices
+  X=`${FSLDIR}/bin/fslval $f dim1`; X=`echo "$X 2 - p" | dc -`
+  Y=`${FSLDIR}/bin/fslval $f dim2`; Y=`echo "$Y 2 - p" | dc -`
+  Z=`${FSLDIR}/bin/fslval $f dim3`; Z=`echo "$Z 2 - p" | dc -`
+  $FSLDIR/bin/fslmaths $f -min 1 -ero -roi 1 $X 1 $Y 1 $Z 0 1 FA/${f}_FA
+
+  # create mask (for use in FLIRT & FNIRT)
+  $FSLDIR/bin/fslmaths FA/${f}_FA -bin FA/${f}_FA_mask
+
+  nice $FSLDIR/bin/fslmaths FA/${f}_FA_mask -dilD -dilD -sub 1 -abs -add FA/${f}_FA_mask FA/${f}_FA_mask -odt char
+
+  $FSLDIR/bin/immv $f origdata
+
+  if [ $struct ]
+  then
+    nice $FSLDIR/bin/bet ${f}_struct struct/${f}_struct_betted
+    $FSLDIR/bin/imcp ${f}_struct struct/.
+    $FSLDIR/bin/immv ${f}_struct origdata/.
+  fi
+
+  if [ $mask ]
+  then
+    nice $FSLDIR/bin/fslmaths ${f}_mask -s 5 -thr 0.05 -bin -sub 1 -abs user_mask/${f}_mask_clean_inclusive -odt char
+    $FSLDIR/bin/immv ${f}_mask origdata/. 
+  fi
+
+done
+
+echo "Now running \"slicesdir\" to generate report of all input images"
+cd FA
+$FSLDIR/bin/slicesdir `$FSLDIR/bin/imglob *_FA.*` > grot 2>&1
+cat grot | tail -n 2
+/bin/rm grot
+

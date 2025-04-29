@@ -1,0 +1,244 @@
+#!/usr/bin/env fslpython
+"""
+fsl_sub.py
+
+fsl_sub for SLURM scheduler used at the University of Nottingham HPC.
+
+
+Sean P. Fitzgibbon
+Matteo Bastiani
+
+Oxford/Nottingham FMRIB/SPMIC 11/2018
+
+"""
+
+import os
+import os.path as op
+import logging
+import subprocess
+import sys
+import argparse
+
+def slurm_cmd(par):
+
+    cmd = ['sbatch', '-J', par['job_name'], '-n', '1', '-p', par['partition']]
+    beacon_opts = '#SBATCH --qos=img'
+
+    outname = op.join(par['logdir'], par['job_name']+'.o%J')
+    errname = op.join(par['logdir'], par['job_name']+'.e%J')
+
+    # if 'n_task' in par and par['n_task'] > 1:
+    #     cmd += ['--array=0-{}'.format(par['n_task']-1)]
+    #     outname += '.%a'
+    #     errname += '.%a'
+    
+    if not op.exists(par['logdir']):
+        os.makedirs(par['logdir'])
+
+    cmd += ['-o', outname, '-e', errname]
+
+    if par['gpu']:
+        cmd += ['--gres=gpu:{}'.format(par['n-gpu'])]
+        beacon_opts += '\n#SBATCH --gres=gpu'
+    
+    if "FSLSUB_NODELIST" in os.environ:
+        cmd += ['--nodelist='+os.getenv('FSLSUB_NODELIST')]
+    
+    if "FSLSUB_EXCLUDE_NODE" in os.environ:
+        cmd += ['--exclude='+os.getenv('FSLSUB_EXCLUDE_NODE')]
+
+    if 'jid' in par:
+        jid = str(par['jid']).split(',')
+        cmd += ['--dependency=afterok:{}'.format(':'.join(jid))]
+
+    if par['mem'] is not None:
+        cmd += ['--mem={}'.format(par['mem'])]
+
+    if par['time'] is not None:
+        cmd += ['-t', str(par['time'])]
+
+    if 'email' in par:
+        cmd += ['--mail-user={}'.format(par['email'])]
+
+    if 'mail-type' in par:
+        cmd += ['--mail-type={}'.format(par['mail-type'])]
+
+    if par['augusta']:
+        beacon_opts = ''
+    
+    script_name = op.join(par['logdir'], par['job_name'] + '.slrmjob.sh')
+    script = '#!/bin/bash\n' + beacon_opts + '\n{cmd}\n'
+
+    with open(op.join(os.getcwd(), script_name), mode='w') as tmp:
+        cmd += [tmp.name]
+        tmp.write(script.format(cmd=par['cmd']))
+
+    outp = subprocess.check_output(cmd)
+    # outp = b'Submitted batch job 5079447'
+
+    outp = outp.decode('utf-8').strip().split()[-1]
+
+    logging.debug(' '.join(cmd))
+
+    # print(' '.join(cmd))
+
+    return outp
+
+
+if __name__ == '__main__':
+
+    # args = docopt(__doc__, version='fsl_sub.py v0.1', options_first=True)
+
+    #if os.getenv('SGE_ROOT') is not None:
+    #    print('HOME environment variable is already defined. Value = is not None')
+    #else:
+    #    print('HOME environment variable is already defined. Value = is None')
+
+
+    parser = argparse.ArgumentParser(description=__doc__)
+
+    parser.add_argument('command', help='command to run', nargs=argparse.REMAINDER, default=None)
+
+    parser.add_argument('-t', metavar='<filename>', default=None,
+                        help='Specify a task file of commands to execute in parallel')
+    parser.add_argument('-T', metavar='<minutes>', default=None,
+                        help='Estimated job length in minutes, overrides defaults')
+    parser.add_argument('-q', metavar='<queuename>', default='long.q',
+                        help='Possible values for <queuename> are verylong.q, long.q and short.q. See below for details')
+    parser.add_argument('-M', metavar='<email-address>', default=None,
+                        help='Who to email, default = ??')
+    parser.add_argument('-m', metavar='<mailoptions>', default=None,
+                        help='Change the SGE mail options, see qsub for details')
+    parser.add_argument('-j', metavar='<jid>', default=None,
+                        help='Place a hold on this task until job jid has completed')
+    parser.add_argument('-N', metavar='<jobname>', default=None,
+                        help='Specify jobname as it will appear on queue')
+    parser.add_argument('-R', metavar='<RAM>', default=None,
+                        help='Max total RAM to use for job (integer in MB), overrides defaults')
+    parser.add_argument('-l', metavar='<logdirname>', default=os.getcwd(),
+                        help='Where to output logfiles')
+    parser.add_argument('-a', action='store_true',
+                        help='If set, run the jobs on the standard Augusta HPC partitions')
+    parser.add_argument('-v', '--verbose', help="increase output verbosity", action="store_true")
+    
+
+    if len(sys.argv) == 1:
+        parser.parse_args(['-h'])
+    else:
+        args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(filename='fsl_sub.log', level=logging.DEBUG)
+    logging.debug(' '.join(sys.argv))
+
+
+    if args.t is None and len(args.command) == 0:
+        raise RuntimeError('No command or command file provided')
+    
+    if args.a:
+        # Use Augusta partitions
+         queue_map = {
+            'veryshort.q': {'time': 30, 'mem': '12G', 'gpu': False, 'partition': 'devq'},
+            'short.q': {'time': 240, 'mem': '12G', 'gpu': False, 'partition': 'shortq'},
+            'long.q': {'time': 1440, 'mem': '12G', 'gpu': False, 'partition': 'defq'},
+            'verylong.q': {'time': None, 'mem': '24G', 'gpu': False, 'partition': 'mmemq'},
+            'bigmem.q': {'time': None, 'mem': '64G', 'gpu': False, 'partition': 'hmemq'},
+            'cuda.q': {'time': None, 'mem': '64G', 'gpu': True, 'partition': 'voltaq'},
+        }
+    else:
+        # Use Beacon partitions
+        queue_map = {
+            'veryshort.q': {'time': 30, 'mem': '12G', 'gpu': False, 'partition': 'imgcomputeq'},
+            'short.q': {'time': 240, 'mem': '12G', 'gpu': False, 'partition': 'imgcomputeq'},
+            'long.q': {'time': 1440, 'mem': '12G', 'gpu': False, 'partition': 'imgcomputeq'},
+            'verylong.q': {'time': None, 'mem': '24G', 'gpu': False, 'partition': 'imgcomputeq'},
+            'bigmem.q': {'time': None, 'mem': '64G', 'gpu': False, 'partition': 'imghmemq'},
+            'cuda.q': {'time': None, 'mem': '64G', 'gpu': True, 'partition': 'imgpascalq,imgvoltaq'},
+            'imgvoltaq': {'time': None, 'mem': '64G', 'gpu': True, 'partition': 'imgvoltaq'},
+            'imgpascalq': {'time': None, 'mem': '64G', 'gpu': True, 'partition': 'imgpascalq'}
+        }
+
+    mail_map = {
+        'b': 'BEGIN',
+        'e': 'END',
+        'a': 'FAIL',
+        's': 'FAIL',
+        'n': 'NONE'
+    }
+
+    # select default settings
+    queue = args.q
+    params = queue_map[queue]
+
+    # select augusta or beacon partitions
+    params['augusta'] = args.a
+    
+    # default number gpus
+    if 'FSLSUB_GPUSPERJOB' in os.environ:
+        ngpu = int(os.getenv('FSLSUB_GPUSPERJOB'))
+    else:
+        ngpu = 1
+    params['n-gpu'] = ngpu
+
+    # set log directory
+    params['logdir'] = args.l
+
+    # set job name
+    if args.N is not None:
+        params['job_name'] = args.N
+    elif len(args.command) > 0:
+        params['job_name'] = op.basename(op.splitext(args.command[0])[0])
+    elif args.t is not None:
+        params['job_name'] = op.basename(op.splitext(args.t)[0])
+
+    # override default memory settings
+    if args.R is not None:
+        params['mem'] = '{}M'.format(int(args.R))
+
+    # override default time settings
+    if args.T is not None:
+        params['time'] = int(args.T)
+
+    # add job hold
+    if args.j is not None:
+        params['jid'] = args.j
+
+    # add email address
+    if args.M is not None:
+        params['email'] = args.M
+
+    # set mail type
+    if args.m is not None:
+        opts = list(args.m)
+        opts = [mail_map[x] for x in opts]
+        params['mail-type'] = ','.join(opts)
+
+    # set command
+    jid = []
+    if len(args.command) > 0:
+        params['cmd'] = ' '.join(args.command)
+        test = ' '.join(args.command)
+        
+        if os.getenv('SGE_ROOT') is not None:
+            jid += [slurm_cmd(params)]
+        else:
+            #print(test)
+            soutp = subprocess.check_output(test, shell=True, executable='/bin/bash')
+
+    elif args.t is not None:
+        with open(args.t, mode='r') as f:
+            for cmd in f:
+                cmd = cmd.rstrip()
+                params['cmd'] = cmd
+
+                if os.getenv('SGE_ROOT') is not None:
+                    jid += [slurm_cmd(params)]
+                else:
+                    print(cmd)
+                    soutp = subprocess.check_output(cmd, shell=True, executable='/bin/bash')
+
+    print(','.join(jid))
+
+
+
+
