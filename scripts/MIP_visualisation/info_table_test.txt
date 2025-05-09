@@ -1,0 +1,8 @@
+Group,Tract,max,min,x,y,z
+Ball_3_Sticks_1Shell_SSFP_Ben,ac,0.392504,0.001,8.8,19.4,15.6
+Ball_3_Sticks_1Shell_SSFP_Ben,StB_frontal_ext2_L,0.040893,0.001,-5.75,21.4,18.6
+Ball_3_Sticks_1Shell_SSFP_Ben,StB_frontal_ext2_R,0.053043,0.001,5.75,21.4,18.6
+Ball_3_Sticks_2Shells_SSFP_bpx,fx_l,0.192446,0.001,-9.8,1.9,15.6
+Ball_3_Sticks_2Shells_SSFP_bpx,fx_r,0.147333,0.001,9.8,1.9,15.6
+bedpostX,ac,0.451946,0.001,8.8,19.4,15.6
+bedpostX,StB_frontal_ext2_L,0.041102,0.001,-5.75,21.4,18.6
