@@ -1,0 +1,74 @@
+------------------------------------------
+*****
+
+Instructions on how to run the QC code for MIP visualisation for a set of tracts across a set of groups.
+
+*****
+------------------------------------------
+##########################################
+------------------------------------------
+######
+
+Step 1: Make a table using the following format for the columns:
+
+Group,Tract,max,min,x,y,z
+
+
+Instructions:
+
+- "Group" --> the name of the data/subject group.
+- "Tract" --> the tract name as can be found in the path to the NIFTI file to be visualised.
+- "max" --> max itensity value to be used in plotting; commonly using the 98th percentile but depends on the distribution of the given tract.
+- "min" --> min intensity value to be used in visualisation; commonly using 0.001 but depends on the distribution of the given tract.
+- [x,y,z] must be in real world coordinates not voxels.
+
+
+** Example table: ${scripts_dir}/info_table_test.txt
+
+Note:
+• The table can either be made manually or using a series of codes available.
+
+• Code to make a [Tract,intensity_max,intensity_min] table: ${scripts_dir}/get_ThreshSummary.sh  * Must specify is single or group average data.
+
+• Code to combine a location and intensity table with group info and get the above final table: ${scripts_dir}/create_comb_table.sh
+
+
+------------------------------------------ 
+######
+
+Step 2: Run the MIP visualisation pipeline
+
+sh ${scripts_dir}/MIP_pipeline_general.sh ${input_table} ${scripts_dir} ${dat_type} ${tract_path} ${window_slices} ${output_path} ${template_brain} ${group_to_process} ${template_space} ${overwrite}
+
+
+OR
+
+
+sh ${scripts_dir}/MIP_pipeline_general_flag.sh -i ${input_table} -s ${scripts_dir} -d ${dat_type} -t ${tract_path} -w ${window_slices} -o ${output_path} -p ${template_brain} -g ${group_to_process} -p ${template_space} -u ${overwrite}
+
+
+
+Instructions:
+
+- ** Required script: ${scripts_dir}/get_MIP_screenshot_general.sh
+
+- "input_table" --> the one produced above with the specific format.
+
+- "scripts_dir" --> where all the scripts live.
+
+- (!!) "tract_path" --> what the path to the xtract output is for a given group. * IF the name of the group appears in the path (ie if processing multiple groups), when passing the path use "group" in place of your group's name and the script will replace is accordingly.
+
+- "dat_type" --> what type of data are you trying to plot; can be "single" or "group".
+
+- "window_slices" --> select the % of slices the maximum intensity projection will interpolate across; recommended: 20
+
+- "output_path" --> path where your output screenshots will be saved.
+
+- "template_brain" --> a standard space (ie space the tracts are in) template brain used for visualisation of the tracts.
+
+- "group_to_process" --> the species type we are imaging; can be "Human" or "Macaque".
+
+- "template_space" --> the template space for a given species; for "Human" it can be "MNI"; for "Macaque" it can be "F99" or "NMT".
+
+- "ovewrite" --> if the output directory already exists, should it be overwritten.
+
