@@ -127,8 +127,7 @@ However, please make sure that scripts are named and put in the right folder. Al
     │   └── jobsub_README.txt
     ├── git_scripts
     │   ├── git_commit.py
-    │   ├── linting_pre_commit
-    │   └── pre-commit
+    │   └── linting_pre_commit
     └── img_utils
         ├── TDI.sh
         ├── ants2fnirt.sh
