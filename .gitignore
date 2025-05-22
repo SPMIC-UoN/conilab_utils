@@ -1,0 +1,5 @@
+# Ignore any data
+*.mat
+*.nii*
+*.nii
+*.gii

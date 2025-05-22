@@ -10,6 +10,8 @@ The general philsopsohy is the onus is on the person using it to make it work no
 
 However, please make sure that scripts are named and put in the right folder. Also this is an open repo so don't put passwords/API keys/personal details
 
+Also please don't update README/delete file_tree.py. Github bot updates the content section of the readme on each push 
+
 ## Content 
 
 ```
