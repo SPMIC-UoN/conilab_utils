@@ -1,0 +1,32 @@
+#!/bin/bash
+
+### Set subject directory
+StudyFolder="/data/Q1200"
+
+split_subs () {
+    mx=$1
+    noSubsTot=`wc -l <  ${orig}`
+    noSubs=`wc -l <  ${orig}`
+    count=0
+    while [[ "$noSubs" -gt "0" ]]; do
+	count=$((count+1))
+	sPath="${outDir}/${count}"
+	if [ "$noSubs" -gt "${mx}" ]; then
+	    echo "`head -${mx} ${orig}`" >> ${sPath}
+	    sed -i -e 1,${mx}d ${orig}
+	else #if [ "$noSubs" -le "${mx}" ]; then
+	    t=`wc -l <  ${orig}`
+	    echo "`head -${t} ${orig}`" >> ${sPath}
+	    sed -i -e 1,${t}d ${orig}
+	fi
+	noSubs=`wc -l <  ${orig}`
+    done
+    rm ${orig}
+}
+mx=$1
+outDir="/data/Q1200/Diffusion/subject_split${mx}"
+rm $outDir -r
+mkdir $outDir
+orig=${outDir}/all
+cp /data/Q1200/Diffusion/all_subjects ${orig}
+split_subs ${mx}

@@ -1,0 +1,6 @@
+#! /bin/bash
+
+echo "Generating file tree "
+repo_root="$(git rev-parse --git-dir)/.."
+repo_root="$(cd "$repo_root" && pwd)"
+python $repo_root/file_tree.py
