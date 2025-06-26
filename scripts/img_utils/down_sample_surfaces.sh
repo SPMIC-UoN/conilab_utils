@@ -6,7 +6,6 @@ function usage {
   echo -e '\n\033[38;5;93mScript to Downsample HCP data\033[0;0m. \n\nUSAGE:'
   echo -e '\t-s:\t-s \n\t\tPath to study directory. \033[1;31mREQUIRED\033[0;0m'
   echo -e '\t-i:\tID:\n\t\t-n Number of vertexes. \033[1;31mREQUIRED\033[0;0m'
-  echo -e "Example Usage: setup_qunex -s /home/user/study_folder -n 1000 \n"
   exit 0
 }
 
